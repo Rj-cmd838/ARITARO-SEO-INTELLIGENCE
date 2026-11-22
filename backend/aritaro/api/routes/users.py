@@ -2,45 +2,64 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from aritaro.domains.project import Project
 from aritaro.domains.website import Website
+from fastapi.security import OAuth2PasswordBearer
+from aritaro.core.security import verify_access_token
+from aritaro.core.dependencies import get_current_user
+
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/users/login")
 
 from aritaro.core.database import get_db
-from aritaro.core.security import hash_password
+from aritaro.core.security import (
+    hash_password,
+    verify_password,
+    create_access_token)
 from aritaro.domains.user import User
-from aritaro.schemas.user import UserCreate, UserResponse
-
+from aritaro.schemas.user import (
+    UserCreate, 
+    UserResponse,
+    LoginRequest,
+    TokenResponse)
+     
 router = APIRouter(
     prefix="/users",
     tags=["Users"]
 )
 
 
+
 @router.post(
-    "/register",
-    response_model=UserResponse,
-    status_code=status.HTTP_201_CREATED
+    "/login",
+    response_model=TokenResponse
 )
-def register_user(
-    user_data: UserCreate,
+def login_user(
+    login_data: LoginRequest,
     db: Session = Depends(get_db)
 ):
-    existing_user = db.query(User).filter(
-        User.email == user_data.email
+    user = db.query(User).filter(
+        User.email == login_data.email
     ).first()
 
-    if existing_user:
+    if not user or not verify_password(
+        login_data.password,
+        user.hashed_password
+    ):
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Email already registered"
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid email or password",
+            headers={"WWW-Authenticate": "Bearer"},
         )
 
-    new_user = User(
-        username=user_data.username,
-        email=user_data.email,
-        hashed_password=hash_password(user_data.password)
+    access_token = create_access_token(
+        data={"sub": str(user.id)}
     )
 
-    db.add(new_user)
-    db.commit()
-    db.refresh(new_user)
+    return {
+        "access_token": access_token,
+        "token_type": "bearer"
+    }
 
-    return new_user
+@router.get("/me", response_model=UserResponse)
+def get_my_profile(
+    current_user: User = Depends(get_current_user)
+):
+    return current_user
